@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import json
+import logging
+
+from fabric.api import env, run, settings
+env.use_ssh_config = True
+
+logger = logging.getLogger('shell-vcr')
+log_path = '{}/vcr-data/vcr.log'.format(os.getcwd())
+hdlr = logging.FileHandler('/tmp/shell-vcr.log')
+formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+hdlr.setFormatter(formatter)
+logger.addHandler(hdlr)
+logger.setLevel(logging.DEBUG)
+
+
+def _replay(command, command_file):
+    logger.info('VCR will replay "{}" from "{}".'.format(
+        command,
+        command_file
+    ))
+
+    # Get command file, produced by _record()
+    with open(command_file, 'r') as command_file_h:
+        command_result = json.loads(command_file_h.read())
+
+    # Pretent to be the called program.
+    sys.stdout.write(command_result['stdout'])
+    sys.stderr.write(command_result['stderr'])
+    sys.exit(command_result['return_code'])
+
+
+def _record(command, command_file, remote):
+    logger.info('VCR will record "{}" on "{}" in "{}".'.format(
+        command,
+        remote or 'localhost',
+        command_file
+    ))
+
+    # Use fabric to run command on remote.
+    with settings(host_string=remote):
+        result = run(command, combine_stderr=False)
+
+    # Write command output to command_file.
+    with open(command_file, 'w') as command_file_h:
+        command_file_h.write(json.dumps({
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'return_code': result.return_code
+            })
+        )
+
+
+def main():
+    # Horrible hack to find out how we were called.
+    # Unfortunately that seems to be the best we got on UNIX.
+    command = '{} {}'.format(
+        sys.argv[0].split('/')[-1],
+        ' '.join(sys.argv[1:])
+    )
+
+    data_dir = os.environ.get('VCR_DATA_DIR')
+    command_file = '{}/{}/{}'.format(os.getcwd(), data_dir, command)
+
+    mode = os.environ.get('VCR_MODE')
+    if mode == 'RECORD':
+        remote = os.environ.get('VCR_REMOTE_HOST')
+        _record(command, command_file, remote)
+        _replay(command, command_file)
+    elif mode == 'REPLAY':
+        _replay(command, command_file)
+    else:
+        print("Set the VCR_MODE environment variable to "
+              "REPLAY or RECORD, not {}.".format(mode))
+
+
+if __name__ == '__main__':
+        main()
